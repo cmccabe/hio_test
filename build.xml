@@ -1,0 +1,23 @@
+<project>
+    <target name="clean">
+        <delete dir="build"/>
+    </target>
+
+    <target name="compile">
+        <mkdir dir="build/classes"/>
+        <javac srcdir="src" destdir="build/classes"/>
+    </target>
+
+    <target name="jar">
+        <mkdir dir="build/jar"/>
+        <jar destfile="build/jar/HioBench.jar" basedir="build/classes">
+            <manifest>
+                <attribute name="Main-Class" value="com.cloudera.HioBench"/>
+            </manifest>
+        </jar>
+    </target>
+
+    <target name="run">
+        <java jar="build/jar/HioBench.jar" fork="true"/>
+    </target>
+</project>
