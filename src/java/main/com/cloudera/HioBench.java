@@ -31,7 +31,6 @@ import java.util.List;
 import java.util.Random;
 import java.util.StringTokenizer;
 
-/*
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -59,7 +58,6 @@ import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
-*/
 
 public class HioBench { //extends Configured {
   public static void main(String[] args) throws Exception {
