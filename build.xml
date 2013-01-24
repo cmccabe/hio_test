@@ -1,11 +1,17 @@
 <project>
+    <property name="lib.dir" value="lib"/>
+
+    <path id="classpath">
+        <fileset dir="${lib.dir}" includes="**/*.jar"/>
+    </path>
+
     <target name="clean">
         <delete dir="build"/>
     </target>
 
     <target name="compile">
         <mkdir dir="build/classes"/>
-        <javac srcdir="src" destdir="build/classes"/>
+        <javac srcdir="src" destdir="build/classes" classpathref="classpath"/>
     </target>
 
     <target name="jar">
@@ -18,6 +24,11 @@
     </target>
 
     <target name="run">
-        <java jar="build/jar/HioBench.jar" fork="true"/>
+        <java jar="build/jar/HioBench.jar" fork="true">
+            <classpath>
+                <path refid="classpath"/>
+                <path location="${jar.dir}/${ant.project.name}.jar"/>
+            </classpath>
+        </java>
     </target>
 </project>
