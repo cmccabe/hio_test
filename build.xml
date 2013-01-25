@@ -18,6 +18,6 @@
     </target>
 
     <target name="run">
-        <java jar="build/jar/HioBench.jar" fork="true"/>
+        <java jar="build/jar/HioBench.jar" fork="true" clonevm="true"/>
     </target>
 </project>

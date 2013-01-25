@@ -50,12 +50,47 @@ import org.apache.hadoop.io.Text;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
+/**
+ * This benchmark tests I/O in HDFS.
+ */
 public class HioBench { //extends Configured {
-  public static void main(String[] args) throws Exception {
-    if (args.length < 1) {
-      System.out.println("HioBench: must supply the HDFS uri.");
-      System.exit(1);
+  private static void usage(int retval) {
+    System.err.println(
+        "HioBench: tests random HDFS I/O.\n" +
+        "\n" +
+        "Java system properties to set:\n" +
+        "hio.nthreads [number-of-threads]   Number of simultaneous threads\n" +
+        "hio.ngigs.to.read [gigabytes]      Number of gigabytes to read in each thread\n" +
+        "hio.ngigs.in.file [gigabytes]      Number of gigabytes in the file to write\n" +
+        "hio.hdfs.uri [uri]                 The HDFS URI to talk to.\n"
+    );
+    System.exit(retval);
+  }
+
+  static int getIntOrDie(String key) {
+    String val = System.getProperty(key);
+    if (val == null) {
+      System.err.println("You must set the integer property " + key + "\n\n");
+      usage(1);
     }
-    System.out.println("exiting.");
+    return Integer.parseInt(val);
+  }
+
+  static String getStringOrDie(String key) {
+    String val = System.getProperty(key);
+    if (val == null) {
+      System.err.println("You must set the string property " + key + "\n\n");
+      usage(1);
+    }
+    return val;
+  }
+
+  public static void main(String[] args) throws Exception {
+    int nThreads = getIntOrDie("hio.nthreads");
+    int nGigsToRead = getIntOrDie("hio.ngigs.to.read");
+    int nGigsInFile = getIntOrDie("hio.ngigs.in.file");
+    String hdfsUri = getStringOrDie("hio.hdfs.uri");
+
+    System.err.println("exiting.");
   }
 }
