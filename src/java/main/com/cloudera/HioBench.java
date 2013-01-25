@@ -170,16 +170,16 @@ public class HioBench { //extends Configured {
       this.fis = fs.open(options.filePath);
     }
 
-    public static void readFully(InputStream in, byte buf[],
-        int off, int len) throws IOException {
-      int toRead = len;
-      while (toRead > 0) {
-        int ret = in.read(buf, off, toRead);
+    public static void readFully(FSDataInputStream in, long off, byte buf[],
+        int arrayOff, int len) throws IOException {
+      while (len > 0) {
+        int ret = in.read(off + arrayOff, buf, arrayOff, len);
         if (ret < 0) {
-          throw new IOException( "Premature EOF from inputStream");
+          throw new IOException( "Premature EOF from inputStream reading " +
+              len + "bytes from offset " + off + " in " + options.filename);
         }
-        toRead -= ret;
-        off += ret;
+        len -= ret;
+        arrayOff += ret;
       }
     }
 
@@ -206,13 +206,14 @@ public class HioBench { //extends Configured {
 
         while (amtRead < options.nBytesToRead) {
           // Using modulo here isn't great, but it's good enough here.
-          long off = random.nextLong() %
-              (options.nBytesInFile - options.nReadChunkBytes);
+          long off = random.nextLong();
+          if (off < 0) off = -off;
+          off %= (options.nBytesInFile - options.nReadChunkBytes - 1);
 
           for (int i = 0; i < options.nReadChunkBytes; i++) {
             expect[i] = offsetToExpectedByte(off + i);
           }
-          readFully(fis, got, 0, got.length);
+          readFully(fis, off, got, 0, got.length);
           compareArrays(expect, got);
           amtRead -= options.nReadChunkBytes;
         }
