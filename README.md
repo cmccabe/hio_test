@@ -22,6 +22,10 @@ It's also important to make sure libhadoop.so is in your LD\_LIBRARY\_PATH;
 otherwise, you won't get features like short-circuit local reads which are
 important for performance.
 
+Alternately, you can directly run the jar with:
+
+    java -Dhio.nthreads=5 -Dhio.ngigs.to.read=1 -Dhio.ngigs.in.file=1 -Dhio.hdfs.uri=hdfs://localhost:6000 com.cloudera.HioBench
+
 Contact information
 -------------------------------------------------------------
 Colin Patrick McCabe <cmccabe@alumni.cmu.edu>
