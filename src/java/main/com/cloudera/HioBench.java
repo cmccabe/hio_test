@@ -18,6 +18,8 @@
 
 package com.cloudera;
 
+import java.io.InputStream;
+import java.io.BufferedOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -31,6 +33,7 @@ import java.util.List;
 import java.util.Random;
 import java.util.StringTokenizer;
 
+import org.apache.commons.codec.binary.Hex;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -61,8 +64,21 @@ public class HioBench { //extends Configured {
         "Java system properties to set:\n" +
         "hio.nthreads [number-of-threads]   Number of simultaneous threads\n" +
         "hio.ngigs.to.read [gigabytes]      Number of gigabytes to read in each thread\n" +
+        "hio.read.chunk.bytes [bytes]       Number of bytes to read in each chunk (default 512)\n" +
         "hio.ngigs.in.file [gigabytes]      Number of gigabytes in the file to write\n" +
-        "hio.hdfs.uri [uri]                 The HDFS URI to talk to.\n"
+        "hio.hdfs.uri [uri]                 The HDFS URI to talk to.\n" +
+        "hio.hdfs.file.name [name]          The name of the input file to use.\n" +
+        "                                   If the file already exists, we will use it\n" +
+        "                                   rather than rewriting it.\n" +
+        "\n" +
+        "A few notes about configuration:\n" +
+        "If you want to be sure that your reads hit the disk, you need to set\n" +
+        "hio.ngigs.in.file to something much higher than the available memory size.\n" +
+        "Otherwise, you're mostly reading from the page cache, which may or may not\n" +
+        "be what you want.\n" +
+        "\n" +
+        "The more threads you have, the more 'seeky' your workload will be, since\n" +
+        "each thread independently seeks and reads.\n"
     );
     System.exit(retval);
   }
@@ -76,6 +92,14 @@ public class HioBench { //extends Configured {
     return Integer.parseInt(val);
   }
 
+  static int getIntWithDefault(String key, int defaultVal) {
+    String val = System.getProperty(key);
+    if (val == null) {
+      return defaultVal;
+    }
+    return Integer.parseInt(val);
+  }
+
   static String getStringOrDie(String key) {
     String val = System.getProperty(key);
     if (val == null) {
@@ -85,12 +109,166 @@ public class HioBench { //extends Configured {
     return val;
   }
 
-  public static void main(String[] args) throws Exception {
-    int nThreads = getIntOrDie("hio.nthreads");
-    int nGigsToRead = getIntOrDie("hio.ngigs.to.read");
-    int nGigsInFile = getIntOrDie("hio.ngigs.in.file");
-    String hdfsUri = getStringOrDie("hio.hdfs.uri");
+  static String getStringWithDefault(String key, String defaultVal) {
+    String val = System.getProperty(key);
+    if (val == null) {
+      return defaultVal;
+    }
+    return val;
+  }
 
-    System.err.println("exiting.");
+  static byte offsetToExpectedByte(long off) {
+    return (byte)(((off * 1103515245) + 12345) & 0xff);
+  }
+
+  static void writeFile(FileSystem fs)
+    throws IOException
+  {
+    FSDataOutputStream fos = fs.create(options.filePath);
+    BufferedOutputStream bos = new BufferedOutputStream(fos, 100000);
+    try {
+      for (long off = 0; off < options.nBytesInFile; off++) {
+        bos.write(offsetToExpectedByte(off));
+      }
+    } finally {
+      bos.close();
+    }
+  }
+
+  static private class Options {
+    public final int nThreads;
+    public final int nGigsToRead;
+    public final long nBytesToRead;
+    public final int nReadChunkBytes;
+    public final int nGigsInFile;
+    public final long nBytesInFile;
+    public final String hdfsUri;
+    public final String filename;
+    public final Path filePath;
+
+    public Options() {
+      nThreads = getIntOrDie("hio.nthreads");
+      nGigsToRead = getIntOrDie("hio.ngigs.to.read");
+      nBytesToRead = nGigsToRead * 1024L * 1024L * 1024L;
+      nReadChunkBytes = getIntWithDefault("hio.read.chunk.bytes", 512);
+      nGigsInFile = getIntOrDie("hio.ngigs.in.file");
+      nBytesInFile = nGigsInFile * 1024L * 1024L * 1024L;
+      hdfsUri = getStringOrDie("hio.hdfs.uri");
+      filename = getStringWithDefault("hio.hdfs.file.name",
+          "/hio_bench_test." + System.currentTimeMillis());
+      filePath = new Path(filename);
+    }
+  };
+
+  private static Options options;
+
+  static private class WorkerThread extends Thread {
+    private final FSDataInputStream fis;
+    private final Random random = new Random(System.nanoTime());
+
+    public WorkerThread(FileSystem fs) throws IOException {
+      this.fis = fs.open(options.filePath);
+    }
+
+    public static void readFully(InputStream in, byte buf[],
+        int off, int len) throws IOException {
+      int toRead = len;
+      while (toRead > 0) {
+        int ret = in.read(buf, off, toRead);
+        if (ret < 0) {
+          throw new IOException( "Premature EOF from inputStream");
+        }
+        toRead -= ret;
+        off += ret;
+      }
+    }
+
+    public static void compareArrays(byte expect[], byte got[]) throws IOException {
+      int bad = -1;
+      for (int i = 0; i < options.nReadChunkBytes; i++) {
+        if (got[i] != expect[i]) {
+          bad = i;
+          break;
+        }
+      }
+      if (bad != -1) {
+        throw new IOException("compareArrays: error on byte " + bad + ".\n" +
+            "Expected: " + Hex.encodeHexString(expect) + "\n" +
+            "Got:      " + Hex.encodeHexString(got) + "\n");
+      }
+    }
+
+    public void run () {
+      byte expect[] = new byte[options.nReadChunkBytes];
+      byte got[] = new byte[options.nReadChunkBytes];
+      try {
+        long amtRead = 0;
+
+        while (amtRead < options.nBytesToRead) {
+          // Using modulo here isn't great, but it's good enough here.
+          long off = random.nextLong() %
+              (options.nBytesInFile - options.nReadChunkBytes);
+
+          for (int i = 0; i < options.nReadChunkBytes; i++) {
+            expect[i] = offsetToExpectedByte(off + i);
+          }
+          readFully(fis, got, 0, got.length);
+          compareArrays(expect, got);
+          amtRead -= options.nReadChunkBytes;
+        }
+      } catch (IOException e) {
+        // can't throw an IOException from Runnable#run.
+        throw new RuntimeException("IOException: " + e, e);
+      }
+    }
+  }
+
+  static String prettyPrintByteSize(float size) {
+    if (size < 1024) {
+      return String.format("%f bytes", size);
+    } else if (size < (1024 * 1024)) {
+      return String.format("%f KBytes", size / 1024);
+    } else if (size < (1024 * 1024 * 1024)) {
+      return String.format("%f MBytes", size / (1024 * 1024));
+    } else {
+      return String.format("%f GBytes", size / (1024 * 1024 * 1024));
+    }
+  }
+
+  public static void main(String[] args) throws Exception {
+    options = new Options();
+    final Configuration conf = new Configuration();
+    final FileSystem fs = FileSystem.get(new URI(options.hdfsUri), conf);
+
+    if (!fs.exists(options.filePath)) {
+      writeFile(fs);
+    } else if (fs.getLength(options.filePath) != options.nBytesInFile) {
+      System.out.println("existing file " + options.filename + " has length " +
+        fs.getLength(options.filePath) + ", but we wanted length " +
+        options.nBytesInFile + ".  Re-creating.");
+      writeFile(fs);
+    }
+
+    long nanoStart = System.nanoTime();
+    WorkerThread threads[] = new WorkerThread[options.nThreads];
+    for (int i = 0; i < options.nThreads; i++) {
+      threads[i] = new WorkerThread(fs);
+    }
+    for (int i = 0; i < options.nThreads; i++) {
+      threads[i].start();
+    }
+    for (int i = 0; i < options.nThreads; i++) {
+      threads[i].join();
+    }
+    long nanoEnd = System.nanoTime();
+    fs.close();
+    long totalIo = options.nThreads;
+    totalIo *= options.nBytesToRead;
+    long nanoDiff = nanoEnd - nanoStart;
+    float seconds = nanoDiff / 1000000000L;
+    System.out.println(String.format("Wrote %s bytes in %f seconds",
+        prettyPrintByteSize(totalIo), seconds));
+    float rate = totalIo / seconds;
+    System.out.println("Average rate was " + prettyPrintByteSize(rate) + "/s");
   }
 }
