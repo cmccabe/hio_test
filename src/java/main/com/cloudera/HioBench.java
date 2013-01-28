@@ -132,8 +132,8 @@ public class HioBench { //extends Configured {
     try {
       for (long off = 0; off < options.nBytesInFile; ) {
         fillArrayWithExpected(arr, off, arr.length);
-        int rem = (int)(options.nBytesInFile - off);
-        int lim = rem > arr.length ? arr.length : rem;
+        long rem = options.nBytesInFile - off;
+        int lim = rem > arr.length ? arr.length : (int)rem;
         fos.write(arr, 0, lim);
         off += lim;
       }
