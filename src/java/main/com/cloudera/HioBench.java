@@ -117,21 +117,28 @@ public class HioBench { //extends Configured {
     return val;
   }
 
-  static byte offsetToExpectedByte(long off) {
-    return (byte)(((off * 1103515245) + 12345) & 0xff);
+  static void fillArrayWithExpected(byte arr[], long off, int fillLen) {
+    byte incr = (byte)(off & 0xff);
+    for (int i = 0; i < fillLen; i++) {
+      arr[i] = incr++;
+    }
   }
 
   static void writeFile(FileSystem fs)
     throws IOException
   {
-    FSDataOutputStream fos = fs.create(options.filePath);
-    BufferedOutputStream bos = new BufferedOutputStream(fos, 100000);
+    FSDataOutputStream fos = fs.create(options.filePath, (short)1);
+    byte arr[] = new byte[65568];
     try {
-      for (long off = 0; off < options.nBytesInFile; off++) {
-        bos.write(offsetToExpectedByte(off));
+      for (long off = 0; off < options.nBytesInFile; ) {
+        fillArrayWithExpected(arr, off, arr.length);
+        int rem = (int)(options.nBytesInFile - off);
+        int lim = rem > arr.length ? arr.length : rem;
+        fos.write(arr, 0, lim);
+        off += lim;
       }
     } finally {
-      bos.close();
+      fos.close();
     }
   }
 
@@ -165,6 +172,7 @@ public class HioBench { //extends Configured {
   static private class WorkerThread extends Thread {
     private final FSDataInputStream fis;
     private final Random random = new Random(System.nanoTime());
+    private Throwable exception = null;
 
     public WorkerThread(FileSystem fs) throws IOException {
       this.fis = fs.open(options.filePath);
@@ -209,18 +217,19 @@ public class HioBench { //extends Configured {
           long off = random.nextLong();
           if (off < 0) off = -off;
           off %= (options.nBytesInFile - options.nReadChunkBytes - 1);
-
-          for (int i = 0; i < options.nReadChunkBytes; i++) {
-            expect[i] = offsetToExpectedByte(off + i);
-          }
+          fillArrayWithExpected(expect, off, expect.length);
           readFully(fis, off, got, 0, got.length);
           compareArrays(expect, got);
           amtRead -= options.nReadChunkBytes;
         }
-      } catch (IOException e) {
-        // can't throw an IOException from Runnable#run.
-        throw new RuntimeException("IOException: " + e, e);
+      } catch (Throwable t) {
+        t.printStackTrace(System.err);
+        exception = t;
       }
+    }
+
+    public Throwable getException() {
+      return exception;
     }
   }
 
@@ -260,6 +269,13 @@ public class HioBench { //extends Configured {
     }
     for (int i = 0; i < options.nThreads; i++) {
       threads[i].join();
+    }
+    for (int i = 0; i < options.nThreads; i++) {
+      Throwable t = threads[i].getException();
+      if (t != null) {
+        System.err.println("there were exceptions.  Aborting.");
+        System.exit(1);
+      }
     }
     long nanoEnd = System.nanoTime();
     fs.close();
