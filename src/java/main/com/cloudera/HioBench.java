@@ -157,7 +157,7 @@ public class HioBench { //extends Configured {
       nThreads = getIntOrDie("hio.nthreads");
       nGigsToRead = getIntOrDie("hio.ngigs.to.read");
       nBytesToRead = nGigsToRead * 1024L * 1024L * 1024L;
-      nReadChunkBytes = getIntWithDefault("hio.read.chunk.bytes", 512);
+      nReadChunkBytes = getIntWithDefault("hio.read.chunk.bytes", 1048576);
       nGigsInFile = getIntOrDie("hio.ngigs.in.file");
       nBytesInFile = nGigsInFile * 1024L * 1024L * 1024L;
       hdfsUri = getStringOrDie("hio.hdfs.uri");
@@ -170,11 +170,13 @@ public class HioBench { //extends Configured {
   private static Options options;
 
   static private class WorkerThread extends Thread {
+    private final boolean shouldPrint;
     private final FSDataInputStream fis;
     private final Random random = new Random(System.nanoTime());
     private Throwable exception = null;
 
-    public WorkerThread(FileSystem fs) throws IOException {
+    public WorkerThread(boolean shouldPrint, FileSystem fs) throws IOException {
+      this.shouldPrint = shouldPrint;
       this.fis = fs.open(options.filePath);
     }
 
@@ -209,6 +211,7 @@ public class HioBench { //extends Configured {
     public void run () {
       byte expect[] = new byte[options.nReadChunkBytes];
       byte got[] = new byte[options.nReadChunkBytes];
+      int printCount = 0;
       try {
         long amtRead = 0;
 
@@ -218,9 +221,15 @@ public class HioBench { //extends Configured {
           if (off < 0) off = -off;
           off %= (options.nBytesInFile - options.nReadChunkBytes - 1);
           fillArrayWithExpected(expect, off, expect.length);
-          readFully(fis, off, got, 0, got.length);
-          compareArrays(expect, got);
-          amtRead -= options.nReadChunkBytes;
+          readFully(fis, off, got, 0, got.length); compareArrays(expect, got);
+          amtRead += options.nReadChunkBytes;
+          if (shouldPrint) {
+            if (printCount++ == 10000) {
+              System.out.println("thread1: read amtRead = " + amtRead + " out of " +
+                  options.nBytesToRead);
+              printCount = 0;
+            }
+          }
         }
       } catch (Throwable t) {
         t.printStackTrace(System.err);
@@ -251,18 +260,25 @@ public class HioBench { //extends Configured {
     final FileSystem fs = FileSystem.get(new URI(options.hdfsUri), conf);
 
     if (!fs.exists(options.filePath)) {
+      System.out.println("no file at " + options.filePath + "; writing " +
+          "new file now with length " + options.nGigsInFile + " gigs...");
       writeFile(fs);
+      System.out.println("done.");
     } else if (fs.getLength(options.filePath) != options.nBytesInFile) {
       System.out.println("existing file " + options.filename + " has length " +
         fs.getLength(options.filePath) + ", but we wanted length " +
         options.nBytesInFile + ".  Re-creating.");
       writeFile(fs);
+      System.out.println("done.");
+    } else {
+      System.out.println("using existing file at " + options.filePath +
+          " of length " + options.nGigsInFile + " gigs.");
     }
 
     long nanoStart = System.nanoTime();
     WorkerThread threads[] = new WorkerThread[options.nThreads];
     for (int i = 0; i < options.nThreads; i++) {
-      threads[i] = new WorkerThread(fs);
+      threads[i] = new WorkerThread(i == 0, fs);
     }
     for (int i = 0; i < options.nThreads; i++) {
       threads[i].start();
@@ -281,10 +297,10 @@ public class HioBench { //extends Configured {
     fs.close();
     long totalIo = options.nThreads;
     totalIo *= options.nBytesToRead;
-    long nanoDiff = nanoEnd - nanoStart;
-    float seconds = nanoDiff / 1000000000L;
-    System.out.println(String.format("Wrote %s bytes in %f seconds",
-        prettyPrintByteSize(totalIo), seconds));
+    float nanoDiff = nanoEnd - nanoStart;
+    float seconds = nanoDiff / 1000000000;
+    System.out.println(String.format("Using %d threads, read %s in %f seconds",
+        options.nThreads, prettyPrintByteSize(totalIo), seconds));
     float rate = totalIo / seconds;
     System.out.println("Average rate was " + prettyPrintByteSize(rate) + "/s");
   }
