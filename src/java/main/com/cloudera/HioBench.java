@@ -174,6 +174,8 @@ public class HioBench { //extends Configured {
     private final FSDataInputStream fis;
     private final Random random = new Random(System.nanoTime());
     private Throwable exception = null;
+    private final static int TRIES_BETWEEN_TIMECHECK = 20;
+    private final static int MILISECONDS_BETWEEN_PRINT = 5000;
 
     public WorkerThread(boolean shouldPrint, FileSystem fs) throws IOException {
       this.shouldPrint = shouldPrint;
@@ -211,7 +213,8 @@ public class HioBench { //extends Configured {
     public void run () {
       byte expect[] = new byte[options.nReadChunkBytes];
       byte got[] = new byte[options.nReadChunkBytes];
-      int printCount = 0;
+      int checkTimeCounter = 0;
+      long prevPrintTime = 0;
       try {
         long amtRead = 0;
 
@@ -224,10 +227,16 @@ public class HioBench { //extends Configured {
           readFully(fis, off, got, 0, got.length); compareArrays(expect, got);
           amtRead += options.nReadChunkBytes;
           if (shouldPrint) {
-            if (printCount++ == 10000) {
-              System.out.println("thread1: read amtRead = " + amtRead + " out of " +
-                  options.nBytesToRead);
-              printCount = 0;
+            if (checkTimeCounter++ == TRIES_BETWEEN_TIMECHECK) {
+              long now = System.currentTimeMillis();
+              if (now > prevPrintTime + MILISECONDS_BETWEEN_PRINT) {
+                prevPrintTime = now;
+                float percent = amtRead * 100;
+                percent /= options.nBytesToRead;
+                System.out.println("thread1: read amtRead = " + amtRead + " out of " +
+                    options.nBytesToRead + " (" + percent + "%" + ")");
+              }
+              checkTimeCounter = 0;
             }
           }
         }
