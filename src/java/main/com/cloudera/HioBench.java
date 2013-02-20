@@ -181,6 +181,7 @@ public class HioBench { //extends Configured {
 
     interface BenchReader {
       void read(FSDataInputStream fis) throws IOException;
+      void init(FSDataInputStream fis) throws IOException;
     }
 
     static class RandomSeekBenchReader implements BenchReader {
@@ -193,6 +194,9 @@ public class HioBench { //extends Configured {
         this.expect = new byte[options.nReadChunkBytes];
         this.got = new byte[options.nReadChunkBytes];
         this.options = options;
+      }
+
+      public void init(FSDataInputStream fis) throws IOException {
       }
 
       public void read(FSDataInputStream fis) throws IOException {
@@ -209,25 +213,49 @@ public class HioBench { //extends Configured {
     static class SequentialBenchReader implements BenchReader {
       final private byte expect[];
       final private byte got[];
+      private long off;
       final private Options options;
 
-      SequentialBenchReader(Options options) {
+      SequentialBenchReader(Options options, int idx) {
         this.expect = new byte[options.nReadChunkBytes];
         this.got = new byte[options.nReadChunkBytes];
+
+        /*
+         * If there are 3 threads, put each one 1/3 through the file.
+         * Example: if file length is 100, start threads at 0, 33, 66.
+         *
+         * 0----------------100
+         * 0    33     66
+         *
+         * and so forth.
+         */
+        this.off = idx * options.nBytesInFile;
+        this.off /= options.nThreads;
+
         this.options = options;
       }
 
+      public void init(FSDataInputStream fis) throws IOException {
+        fis.seek(this.off);
+      }
+
       public void read(FSDataInputStream fis) throws IOException {
+        if (off + expect.length >= options.nBytesInFile) {
+          off = 0;
+          fis.seek(off);
+        }
+        fillArrayWithExpected(expect, off, expect.length);
         readFully(fis, got, 0, got.length);
         compareArrays(expect, got);
+        off += got.length;
       }
     }
 
-    static BenchReader createBenchReader(Options options) {
+    static BenchReader createBenchReader(Options options, int idx) {
       if (options.testType.equals("random")) {
         return new RandomSeekBenchReader(options);
       } else if (options.testType.equals("sequential")) {
-        return new SequentialBenchReader(options);
+        return new SequentialBenchReader(options, idx);
       } else {
         throw new RuntimeException("can't understand testType " + options.testType +
             ": valid values are 'random' and 'sequential'");
@@ -288,6 +316,7 @@ public class HioBench { //extends Configured {
       try {
         long amtRead = 0;
 
+        benchReader.init(fis);
         while (amtRead < options.nBytesToRead) {
           benchReader.read(fis);
           amtRead += options.nReadChunkBytes;
@@ -353,7 +382,7 @@ public class HioBench { //extends Configured {
     long nanoStart = System.nanoTime();
     WorkerThread threads[] = new WorkerThread[options.nThreads];
     for (int i = 0; i < options.nThreads; i++) {
-      threads[i] = new WorkerThread(i == 0, fs, WorkerThread.createBenchReader(options));
+      threads[i] = new WorkerThread(i == 0, fs, WorkerThread.createBenchReader(options, i));
     }
     for (int i = 0; i < options.nThreads; i++) {
       threads[i].start();
