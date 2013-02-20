@@ -152,6 +152,7 @@ public class HioBench { //extends Configured {
     public final String hdfsUri;
     public final String filename;
     public final Path filePath;
+    public final String testType;
 
     public Options() {
       nThreads = getIntOrDie("hio.nthreads");
@@ -163,6 +164,7 @@ public class HioBench { //extends Configured {
       hdfsUri = getStringOrDie("hio.hdfs.uri");
       filename = getStringWithDefault("hio.hdfs.file.name",
           "/hio_bench_test." + System.currentTimeMillis());
+      testType = getStringWithDefault("hio.hdfs.test.type", "random");
       filePath = new Path(filename);
     }
   };
@@ -172,14 +174,84 @@ public class HioBench { //extends Configured {
   static private class WorkerThread extends Thread {
     private final boolean shouldPrint;
     private final FSDataInputStream fis;
-    private final Random random = new Random(System.nanoTime());
     private Throwable exception = null;
     private final static int TRIES_BETWEEN_TIMECHECK = 20;
     private final static int MILISECONDS_BETWEEN_PRINT = 5000;
+    private final BenchReader benchReader;
 
-    public WorkerThread(boolean shouldPrint, FileSystem fs) throws IOException {
+    interface BenchReader {
+      void read(FSDataInputStream fis) throws IOException;
+    }
+
+    static class RandomSeekBenchReader implements BenchReader {
+      final private byte expect[];
+      final private byte got[];
+      final private Options options;
+      final private Random random = new Random(System.nanoTime());
+
+      RandomSeekBenchReader(Options options) {
+        this.expect = new byte[options.nReadChunkBytes];
+        this.got = new byte[options.nReadChunkBytes];
+        this.options = options;
+      }
+
+      public void read(FSDataInputStream fis) throws IOException {
+        // Using modulo here isn't great, but it's good enough here.
+        long off = random.nextLong();
+        if (off < 0) off = -off;
+        off %= (options.nBytesInFile - options.nReadChunkBytes - 1);
+        fillArrayWithExpected(expect, off, expect.length);
+        readFully(fis, off, got, 0, got.length);
+        compareArrays(expect, got);
+      }
+    }
+
+    static class SequentialBenchReader implements BenchReader {
+      final private byte expect[];
+      final private byte got[];
+      final private Options options;
+
+      SequentialBenchReader(Options options) {
+        this.expect = new byte[options.nReadChunkBytes];
+        this.got = new byte[options.nReadChunkBytes];
+        this.options = options;
+      }
+
+      public void read(FSDataInputStream fis) throws IOException {
+        readFully(fis, got, 0, got.length);
+        compareArrays(expect, got);
+      }
+    }
+
+    static BenchReader createBenchReader(Options options) {
+      if (options.testType.equals("random")) {
+        return new RandomSeekBenchReader(options);
+      } else if (options.testType.equals("sequential")) {
+        return new SequentialBenchReader(options);
+      } else {
+        throw new RuntimeException("can't understand testType " + options.testType +
+            ": valid values are 'random' and 'sequential'");
+      }
+    }
+
+    public WorkerThread(boolean shouldPrint, FileSystem fs,
+          BenchReader benchReader) throws IOException {
       this.shouldPrint = shouldPrint;
       this.fis = fs.open(options.filePath);
+      this.benchReader = benchReader;
+    }
+
+    public static void readFully(FSDataInputStream in, byte buf[],
+        int arrayOff, int len) throws IOException {
+      while (len > 0) {
+        int ret = in.read(buf, arrayOff, len);
+        if (ret < 0) {
+          throw new IOException( "Premature EOF from inputStream reading " +
+              len + "bytes from " + options.filename);
+        }
+        len -= ret;
+        arrayOff += ret;
+      }
     }
 
     public static void readFully(FSDataInputStream in, long off, byte buf[],
@@ -211,21 +283,15 @@ public class HioBench { //extends Configured {
     }
 
     public void run () {
-      byte expect[] = new byte[options.nReadChunkBytes];
-      byte got[] = new byte[options.nReadChunkBytes];
       int checkTimeCounter = 0;
       long prevPrintTime = 0;
       try {
         long amtRead = 0;
 
         while (amtRead < options.nBytesToRead) {
-          // Using modulo here isn't great, but it's good enough here.
-          long off = random.nextLong();
-          if (off < 0) off = -off;
-          off %= (options.nBytesInFile - options.nReadChunkBytes - 1);
-          fillArrayWithExpected(expect, off, expect.length);
-          readFully(fis, off, got, 0, got.length); compareArrays(expect, got);
+          benchReader.read(fis);
           amtRead += options.nReadChunkBytes;
+
           if (shouldPrint) {
             if (checkTimeCounter++ == TRIES_BETWEEN_TIMECHECK) {
               long now = System.currentTimeMillis();
@@ -287,7 +353,7 @@ public class HioBench { //extends Configured {
     long nanoStart = System.nanoTime();
     WorkerThread threads[] = new WorkerThread[options.nThreads];
     for (int i = 0; i < options.nThreads; i++) {
-      threads[i] = new WorkerThread(i == 0, fs);
+      threads[i] = new WorkerThread(i == 0, fs, WorkerThread.createBenchReader(options));
     }
     for (int i = 0; i < options.nThreads; i++) {
       threads[i].start();
