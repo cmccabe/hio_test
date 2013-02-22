@@ -64,6 +64,7 @@ public class HioBench { //extends Configured {
         "Java system properties to set:\n" +
         "hio.nthreads [number-of-threads]   Number of simultaneous threads\n" +
         "hio.ngigs.to.read [gigabytes]      Number of gigabytes to read in each thread\n" +
+        "hio.nmegs.to.read [megs]           Number of megabytes to read in each thread\n" +
         "hio.read.chunk.bytes [bytes]       Number of bytes to read in each chunk (default 512)\n" +
         "hio.ngigs.in.file [gigabytes]      Number of gigabytes in the file to write\n" +
         "hio.hdfs.uri [uri]                 The HDFS URI to talk to.\n" +
@@ -128,7 +129,7 @@ public class HioBench { //extends Configured {
     throws IOException
   {
     FSDataOutputStream fos = fs.create(options.filePath, (short)1);
-    byte arr[] = new byte[65568];
+    byte arr[] = new byte[65536];
     try {
       for (long off = 0; off < options.nBytesInFile; ) {
         fillArrayWithExpected(arr, off, arr.length);
@@ -144,7 +145,6 @@ public class HioBench { //extends Configured {
 
   static private class Options {
     public final int nThreads;
-    public final int nGigsToRead;
     public final long nBytesToRead;
     public final int nReadChunkBytes;
     public final int nGigsInFile;
@@ -156,8 +156,19 @@ public class HioBench { //extends Configured {
 
     public Options() {
       nThreads = getIntOrDie("hio.nthreads");
-      nGigsToRead = getIntOrDie("hio.ngigs.to.read");
-      nBytesToRead = nGigsToRead * 1024L * 1024L * 1024L;
+      long nGigsToRead = getIntWithDefault("hio.ngigs.to.read", 0);
+      long nMegsToRead = getIntWithDefault("hio.nmegs.to.read", 0);
+      if ((nGigsToRead != 0) && (nMegsToRead != 0)) {
+        throw new RuntimeException("can't set both hio.ngigs.to.read and " +
+            "hio.nmegs.to.read!");
+      } else if (nGigsToRead != 0) {
+        nBytesToRead = nGigsToRead * 1024L * 1024L * 1024L;
+      } else if (nMegsToRead != 0) {
+        nBytesToRead = nMegsToRead * 1024L * 1024L;
+      } else {
+        throw new RuntimeException("you must set either hio.ngigs.to.read or " +
+            "hio.nmegs.to.read.");
+      }
       nReadChunkBytes = getIntWithDefault("hio.read.chunk.bytes", 1048576);
       nGigsInFile = getIntOrDie("hio.ngigs.in.file");
       nBytesInFile = nGigsInFile * 1024L * 1024L * 1024L;
