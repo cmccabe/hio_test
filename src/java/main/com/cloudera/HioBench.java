@@ -23,6 +23,7 @@ import java.io.BufferedOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.lang.Thread;
 import java.lang.System;
 import java.net.URI;
@@ -71,6 +72,9 @@ public class HioBench { //extends Configured {
         "hio.hdfs.file.name [name]          The name of the input file to use.\n" +
         "                                   If the file already exists, we will use it\n" +
         "                                   rather than rewriting it.\n" +
+        "dump.conf                          If set, we will dump out our\n" +
+        "                                   configuration to stdout when\n" +
+        "                                   starting up.\n" +
         "\n" +
         "A few notes about configuration:\n" +
         "If you want to be sure that your reads hit the disk, you need to set\n" +
@@ -153,6 +157,7 @@ public class HioBench { //extends Configured {
     public final String filename;
     public final Path filePath;
     public final String testType;
+    public final boolean dumpConf;
 
     public Options() {
       nThreads = getIntOrDie("hio.nthreads");
@@ -175,6 +180,7 @@ public class HioBench { //extends Configured {
       hdfsUri = getStringOrDie("hio.hdfs.uri");
       filename = getStringWithDefault("hio.hdfs.file.name",
           "/hio_bench_test." + System.currentTimeMillis());
+      dumpConf = (System.getProperty("dump.conf") != null);
       testType = getStringWithDefault("hio.hdfs.test.type", "random");
       filePath = new Path(filename);
     }
@@ -372,6 +378,9 @@ public class HioBench { //extends Configured {
   public static void main(String[] args) throws Exception {
     options = new Options();
     final Configuration conf = new Configuration();
+    if (options.dumpConf) {
+      Configuration.dumpConfiguration(conf, new PrintWriter(System.out));
+    }
     final FileSystem fs = FileSystem.get(new URI(options.hdfsUri), conf);
 
     if (!fs.exists(options.filePath)) {
