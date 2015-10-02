@@ -66,7 +66,9 @@ public class HioBench { //extends Configured {
         "hio.nthreads [number-of-threads]   Number of simultaneous threads\n" +
         "hio.ngigs.to.read [gigabytes]      Number of gigabytes to read in each thread\n" +
         "hio.nmegs.to.read [megs]           Number of megabytes to read in each thread\n" +
-        "hio.read.chunk.bytes [bytes]       Number of bytes to read in each chunk (default 512)\n" +
+        "hio.skip.checksum [boolean]        If true, we will skip HDFS checksum (default false)\n" +
+        "hio.read.chunk.bytes [bytes]       Number of bytes to read in each chunk (default 1048576)\n" +
+        "hio.read.offset.alignment [bytes]  Number of bytes that random read offset will be aligned (default 1)\n" +
         "hio.ngigs.in.file [gigabytes]      Number of gigabytes in the file to write\n" +
         "hio.hdfs.uri [uri]                 The HDFS URI to talk to.\n" +
         "hio.hdfs.file.name [name]          The name of the input file to use.\n" +
@@ -104,6 +106,15 @@ public class HioBench { //extends Configured {
     }
     return Integer.parseInt(val);
   }
+
+  static boolean getBooleanWithDefault(String key, boolean defaultVal) {
+    String val = System.getProperty(key);
+    if (val == null) {
+      return defaultVal;
+    }
+    return Boolean.parseBoolean(val);
+  }
+
 
   static String getStringOrDie(String key) {
     String val = System.getProperty(key);
@@ -157,7 +168,9 @@ public class HioBench { //extends Configured {
     public final String filename;
     public final Path filePath;
     public final String testType;
+    public final boolean skipChecksum;
     public final boolean dumpConf;
+    public final int nReadAlign;
 
     public Options() {
       nThreads = getIntOrDie("hio.nthreads");
@@ -182,6 +195,8 @@ public class HioBench { //extends Configured {
           "/hio_bench_test." + System.currentTimeMillis());
       dumpConf = (System.getProperty("dump.conf") != null);
       testType = getStringWithDefault("hio.hdfs.test.type", "random");
+      skipChecksum = getBooleanWithDefault("hio.skip.checksum", false);
+      nReadAlign = getIntWithDefault("hio.read.offset.alignment", 1);
       filePath = new Path(filename);
     }
   };
@@ -221,6 +236,7 @@ public class HioBench { //extends Configured {
         long off = random.nextLong();
         if (off < 0) off = -off;
         off %= (options.nBytesInFile - options.nReadChunkBytes - 1);
+        off = (off / options.nReadAlign) * options.nReadAlign;
         fillArrayWithExpected(expect, off, expect.length);
         readFully(fis, off, got, 0, got.length);
         compareArrays(expect, got);
@@ -382,6 +398,7 @@ public class HioBench { //extends Configured {
       Configuration.dumpConfiguration(conf, new PrintWriter(System.out));
     }
     final FileSystem fs = FileSystem.get(new URI(options.hdfsUri), conf);
+    fs.setVerifyChecksum(!options.skipChecksum);
 
     if (!fs.exists(options.filePath)) {
       System.out.println("no file at " + options.filePath + "; writing " +
